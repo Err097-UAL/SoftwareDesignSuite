@@ -1,5 +1,7 @@
 # ⚡ Electrical Analysis Design Suite (EDS Pro)
 
+APPLET IS LIVE AT https://softwaredesignsuite-csyeb4pxcwzktpaelizztr.streamlit.app/
+
 A professional-grade web application tailored for electrical engineering analysis, network topology optimization, and high-voltage line calculations. Built with **Python** and **Streamlit**.
 
 ![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?style=for-the-badge&logo=Streamlit&logoColor=white)
