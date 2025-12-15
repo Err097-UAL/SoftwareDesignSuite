@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-#enrique attempt 6
+
 # ==============================================================================
 # HELPER FUNCTIONS: ELECTRICAL CALCULATIONS
 # ==============================================================================
@@ -279,7 +279,7 @@ def draw_network_schematic(topology, nodes, l_total, u_a, u_b):
         x=[0], y=[0],
         mode='markers+text',
         marker=dict(symbol='square', size=25, color='#FF5733', line=dict(color='black', width=2)),
-        text=[f"<b>Source A</b><br>{u_a}V"],
+        text=[f"<b>Source A (Start)</b><br>{u_a}V"],
         textposition='top center',
         name='Source A'
     ))
@@ -288,11 +288,13 @@ def draw_network_schematic(topology, nodes, l_total, u_a, u_b):
     if topology != "Radial networks":
         # Handle label for Ring vs Dual-Fed
         if topology == "Ring networks":
-            label = f"<b>Source A</b><br>{u_a}V" # Same source at end
+            label = f"<b>Source A (End)</b><br>{u_a}V" # Same source at end
             color = '#FF5733' # Same color as Source A
+            name = "Source A (End)"
         else:
             label = f"<b>Source B</b><br>{u_b}V"
             color = '#FFC300'
+            name = "Source B"
 
         fig.add_trace(go.Scatter(
             x=[max_dist], y=[0],
@@ -300,7 +302,7 @@ def draw_network_schematic(topology, nodes, l_total, u_a, u_b):
             marker=dict(symbol='square', size=25, color=color, line=dict(color='black', width=2)),
             text=[label],
             textposition='top center',
-            name='End Source'
+            name=name
         ))
 
     # 4. Loads (Schematic representation)
@@ -343,7 +345,7 @@ def draw_network_schematic(topology, nodes, l_total, u_a, u_b):
 
     title_text = "Network Schematic (Linear View)"
     if topology == "Ring networks":
-        title_text = "Ring Topology (Linear Representation)"
+        title_text = "Ring Topology (Linear Representation - Unfolded)"
 
     fig.update_layout(
         title=title_text,
@@ -517,18 +519,18 @@ def app():
             # DIAGRAM GENERATION LOGIC
             # If Ring: Show both Circular and Linear (with Source A at both ends)
             if topology == "Ring networks":
-                st.write("#### 1. Circular Diagram")
+                st.write("#### 1. Circular Diagram (Ring)")
                 circ_fig = draw_ring_schematic_circular(nodes, l_total, u_nom)
-                st.plotly_chart(circ_fig, use_container_width=True)
+                st.plotly_chart(circ_fig, use_container_width=True, key="ring_circ_diag")
                 
-                st.write("#### 2. Linear Unfolded Diagram")
+                st.write("#### 2. Linear Unfolded Diagram (Ring)")
                 # Passes u_nom for both u_a and u_b, allowing draw_network_schematic to handle the labels
                 linear_fig = draw_network_schematic(topology, nodes, l_total, u_nom, u_nom)
-                st.plotly_chart(linear_fig, use_container_width=True)
+                st.plotly_chart(linear_fig, use_container_width=True, key="ring_linear_diag")
             else:
                 # Radial or Dual-Fed
                 schematic_fig = draw_network_schematic(topology, nodes, l_total, u_nom, u_b)
-                st.plotly_chart(schematic_fig, use_container_width=True)
+                st.plotly_chart(schematic_fig, use_container_width=True, key="std_schematic")
             
             if topology == "Radial networks":
                 res_df = solve_radial_profile(u_nom, nodes, sigma, selected_section, phase_type)
@@ -542,7 +544,7 @@ def app():
                 
                 fig = px.line(res_df, x='Distance', y='Voltage', markers=True, title=f"Voltage Profile (Radial, {selected_section} mm²)")
                 fig.add_hline(y=u_nom * (1 - max_drop/100), line_dash="dash", line_color="red", annotation_text="Limit")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="radial_volt_prof")
                 
             else:
                 # Common logic for Dual-Fed and Ring
@@ -566,12 +568,12 @@ def app():
                 
                 fig.update_layout(title="Voltage Profile", xaxis_title="Distance (m)", yaxis_title="Voltage (V)")
                 fig.add_hline(y=u_nom * (1 - max_drop/100), line_dash="dash", line_color="red", annotation_text="Limit")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key="dual_volt_prof")
                 
                 # Updated Current Distribution Plot
                 fig2 = px.area(res_df, x='Distance', y='Current_Flow_Mag', title="Current Flow Distribution (Approx Magnitude)")
                 fig2.update_traces(line_shape='hv')
-                st.plotly_chart(fig2, use_container_width=True)
+                st.plotly_chart(fig2, use_container_width=True, key="curr_dist_prof")
 
     st.markdown("---")
     st.caption("Reference: University of Almería - Week 3: Network Topology and Dimensioning")
