@@ -1,204 +1,352 @@
 import streamlit as st
-import numpy as np
 import pandas as pd
-import plotly.express as px
+import numpy as np
 import plotly.graph_objects as go
+import plotly.express as px
 
 # ==============================================================================
-# BLOQUE DE FUNCIONES 1: MOTOR DE CÁLCULO (Traducción de H, I, J series)
+# HELPER FUNCTIONS: ELECTRICAL CALCULATIONS
 # ==============================================================================
 
-def get_material_properties(name):
-    """ Equivalente a getMaterialProperties.m """
-    if name == "Cobre":
-        return {"sigma": 56.0, "cost_factor": 1.5}
-    elif name == "Aluminio":
-        return {"sigma": 36.0, "cost_factor": 1.0}
+def get_k_factor(phase_type):
+    """
+    Returns the K factor for voltage drop calculations.
+    Single-phase (Monofásica): 2
+    Three-phase (Trifásica): sqrt(3) -> approx 1.732
+    """
+    return 2.0 if phase_type == "Single-phase" else np.sqrt(3)
+
+def calculate_current(p_kw, u_volts, cos_phi, phase_type):
+    """
+    Calculates Current (I) from Power (P in kW).
+    I = (P * 1000) / (U * cos_phi)        [Single-phase]
+    I = (P * 1000) / (sqrt(3) * U * cos_phi) [Three-phase]
+    """
+    if cos_phi == 0 or u_volts == 0:
+        return 0.0
+    if phase_type == "Single-phase":
+        return (p_kw * 1000) / (u_volts * cos_phi)
     else:
-        return {"sigma": 56.0, "cost_factor": 1.0}
+        return (p_kw * 1000) / (np.sqrt(3) * u_volts * cos_phi)
 
-def solve_radial_network(U_source, nodes_df, phase_type, sigma, section):
-    """ Equivalente a H1_Radial_Analysis.m """
-    k = 2 if phase_type == "Monofásica" else 1 
-    nodes = nodes_df.sort_values("Distancia (m)").to_dict('records')
-    total_current = sum(n["Carga (A)"] for n in nodes)
+def suggest_cross_section(moment_sum, u_source, max_drop_percent, sigma, phase_type, cos_phi_avg=1.0):
+    """
+    Calculates required cross-section S based on max allowed voltage drop.
+    Using PDF Eq (8) and (9) generalized for moments:
+    S = (K * Sum(I*L) * cos_phi) / (sigma * DeltaU)
+    Note: The PDF formulas (8/9) include cos_phi in the numerator for sizing.
+    """
+    delta_u_max = u_source * (max_drop_percent / 100.0)
+    k = get_k_factor(phase_type)
+    
+    # Formula: S = (K * Moment_Sum * cos_phi) / (sigma * delta_u)
+    # If standard moments method (resistive approx) is used, cos_phi might be omitted, 
+    # but PDF explicitly includes it in Eq 8 & 9.
+    if delta_u_max == 0:
+        return 0.0
+    
+    s_req = (k * moment_sum * cos_phi_avg) / (sigma * delta_u_max)
+    return s_req
+
+def solve_radial_profile(u_source, nodes, sigma, section, phase_type):
+    """
+    Calculates voltage profile segment by segment.
+    nodes: List of dicts with 'dist_prev', 'current', 'cos_phi', 'dist_source'
+    """
+    k = get_k_factor(phase_type)
+    current_u = u_source
+    profile = [{'Distance': 0, 'Voltage': u_source, 'Drop_Seg': 0, 'Section_Current': 0}]
+    
+    # Calculate total current flowing through first segment
+    total_current = sum(n['current'] for n in nodes)
     current_flow = total_current
     
-    processed_nodes = []
-    prev_dist = 0
-    voltage_current = U_source
+    cum_dist = 0
     
     for n in nodes:
-        dist = n["Distancia (m)"]
-        load_i = n["Carga (A)"]
-        segment_len = dist - prev_dist
-        R_seg = segment_len / (sigma * section)
-        drop_seg = k * current_flow * R_seg
-        voltage_current -= drop_seg
+        # R = L / (sigma * S)
+        # DeltaU = K * I * R * cos_phi (Approximation using active component)
+        # Using simple resistive drop K*I*R is standard for these approximations unless X is given.
+        # PDF Eq 8 implies DeltaU = (K d I cos_phi) / (sigma S).
         
-        processed_nodes.append({
-            "Distancia": dist,
-            "Carga": load_i,
-            "Corriente_Tramo": current_flow,
-            "Caída_Tramo": drop_seg,
-            "Tensión": voltage_current
+        r_segment = n['dist_prev'] / (sigma * section)
+        drop_segment = (k * current_flow * r_segment * n['cos_phi']) # Using specific cos_phi of the load/segment
+        
+        current_u -= drop_segment
+        cum_dist += n['dist_prev']
+        
+        profile.append({
+            'Distance': cum_dist,
+            'Voltage': current_u,
+            'Drop_Seg': drop_segment,
+            'Section_Current': current_flow
         })
-        current_flow -= load_i
-        prev_dist = dist
         
-    return pd.DataFrame(processed_nodes)
-
-def solve_dual_fed_network(Ua, Ub, L_total, loads_df, sigma, section):
-    """ Equivalente a I1_DualFed_Analysis.m y J1_Ring_Analysis.m """
-    R_total_line = L_total / (sigma * section)
-    loads = loads_df.sort_values("Distancia (m)").to_dict('records')
-    moment_sum = sum(load["Carga (A)"] * (L_total - load["Distancia (m)"]) for load in loads)
-    
-    Ia = (1/L_total) * moment_sum + (Ua - Ub) / R_total_line
-    Ib = sum(l["Carga (A)"] for l in loads) - Ia
-    
-    profile = [{"Distancia": 0, "Tensión": Ua, "Corriente_Acum": Ia, "Tipo": "Fuente A"}]
-    current_flow, v_current, prev_dist = Ia, Ua, 0
-    min_v, min_v_dist = float('inf'), 0
-    
-    for load in loads:
-        dist, i_load = load["Distancia (m)"], load["Carga (A)"]
-        R_seg = (dist - prev_dist) / (sigma * section)
-        v_current -= current_flow * R_seg
-        profile.append({"Distancia": dist, "Tensión": v_current, "Corriente_Acum": current_flow, "Tipo": "Carga"})
-        if v_current < min_v: min_v, min_v_dist = v_current, dist
-        current_flow -= i_load
-        prev_dist = dist
+        current_flow -= n['current']
         
-    profile.append({"Distancia": L_total, "Tensión": Ub, "Corriente_Acum": current_flow, "Tipo": "Fuente B"})
-    return pd.DataFrame(profile), Ia, Ib, min_v, min_v_dist
+    return pd.DataFrame(profile)
 
-def calc_network_cost(topology_type, L_total, loads_df, sigma, section, material_cost_factor):
-    base_price = 5.0 + (section * 0.15) * material_cost_factor
-    cable_len = loads_df["Distancia (m)"].max() if topology_type == "Radial" else L_total
-    capex = cable_len * base_price
-    total_amps = loads_df["Carga (A)"].sum()
-    R_total = cable_len / (sigma * section)
-    opex = ((total_amps**2 * R_total * 0.33) / 1000) * (20 * 365 * 10) * 0.15
-    return capex, opex
-
-# ==============================================================================
-# BLOQUE DE FUNCIONES 2: VISUALIZACIÓN
-# ==============================================================================
-
-def plot_unifilar_ring(L_total, loads_df):
-    fig = go.Figure()
-    theta = np.linspace(0, 2*np.pi, 100)
-    fig.add_trace(go.Scatter(x=np.cos(theta), y=np.sin(theta), mode='lines', line=dict(color='white', width=3)))
-    fig.add_trace(go.Scatter(x=[0], y=[1], mode='markers+text', marker=dict(symbol='square', size=15, color='#00ADB5'), text=["Fuente"]))
-    for _, row in loads_df.iterrows():
-        angle = (np.pi/2) - (row["Distancia (m)"] / L_total) * (2 * np.pi)
-        fig.add_trace(go.Scatter(x=[np.cos(angle), np.cos(angle)*0.85], y=[np.sin(angle), np.sin(angle)*0.85], mode='lines', line=dict(color='red')))
-    fig.update_layout(showlegend=False, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="white")
-    return fig
-
-def plot_loading_diagram(profile_df, L_total):
-    fig = go.Figure()
-    dist, curr = profile_df["Distancia"].tolist(), profile_df["Corriente_Acum"].tolist()
-    x_s, y_s = [], []
-    for i in range(len(dist)-1):
-        x_s.extend([dist[i], dist[i+1]])
-        y_s.extend([curr[i], curr[i]])
-    fig.add_trace(go.Scatter(x=x_s, y=y_s, mode='lines', fill='tozeroy', line=dict(color='#00ADB5')))
-    fig.update_layout(title="Distribución de Corrientes", xaxis_title="m", yaxis_title="A")
-    return fig
-
-# ==============================================================================
-# BLOQUE DE FUNCIONES 3: INTERFAZ DE USUARIO (TABS)
-# ==============================================================================
-
-def render_radial_tab():
-    st.subheader("1. Análisis de Red Radial (H)")
+def solve_dual_fed(u_a, u_b, l_total, nodes, sigma, section, phase_type):
+    """
+    Solves Dual-Fed network (PDF Eq 12 & 13).
+    Returns profile, Ia, Ib, and split point info.
+    """
+    k = get_k_factor(phase_type)
     
-    with st.expander("📖 Fundamentos: Método de los Momentos Eléctricos"):
-        st.markdown("En redes radiales con cargas concentradas, la caída de tensión acumulada se calcula mediante la suma de los momentos eléctricos de cada tramo:")
-        st.latex(r"\Delta U = \sum_{i=1}^{n} \Delta U_i = \frac{K}{\sigma \cdot S} \sum_{i=1}^{n} (I_{tramo,i} \cdot L_i)")
-        st.write("Donde $K$ es el factor de fase (2 para monofásico, 1 para trifásico fase-neutro).")
-        st.link_button("📜 Teoría: Momentos Eléctricos (García Trasancos)", "https://www.paraninfo.es/catalogo/9788428338974/instalaciones-electricas-en-media-y-baja-tension")
-
+    # Calculate moments from Source A
+    moment_sum_a = sum(n['current'] * n['dist_source'] for n in nodes)
+    sum_currents = sum(n['current'] for n in nodes)
     
-
-    c1, c2 = st.columns(2)
-    U_source = c1.number_input("Tensión Fuente (V)", 230.0)
-    phase = c2.selectbox("Sistema", ["Monofásica", "Trifásica"])
-    df_loads = st.data_editor(pd.DataFrame([{"Distancia (m)": 50, "Carga (A)": 20}, {"Distancia (m)": 150, "Carga (A)": 15}]), num_rows="dynamic")
+    # Resistance of total line
+    r_total = l_total / (sigma * section)
     
-    if st.button("Calcular Red Radial"):
-        res = solve_radial_network(U_source, df_loads, phase, 56, 50)
-        st.plotly_chart(px.line(res, x="Distancia", y="Tensión", markers=True, title="Perfil de Tensión"), use_container_width=True)
-
-def render_dualfed_tab():
-    st.subheader("2. Red de Doble Alimentación (I)")
+    # Calculate Ia (Eq 12 modified for unequal voltages if needed)
+    # PDF Eq 12: Iy = Sum(i*d)/d (This calculates contribution from B if d is dist from A)
+    # Actually, standard formula: Ia = [Sum(I*(L-x)) + (Ua-Ub)/Z] / L  <-- This is confusing in text.
+    # Let's use the PDF Eq 12 interpretation:
+    # Iy = (Sum i_k * d_k) / d  (where d_k is distance from A, this calculates Current from B theoretically if Ua=Ub)
+    # Then Ix = Sum(i_k) - Iy
     
-    with st.expander("📖 Fundamentos: Reparto de Cargas"):
-        st.markdown("Para una línea alimentada por ambos extremos ($V_A$ y $V_B$), la corriente de aporte desde la fuente A se determina por:")
-        st.latex(r"I_A = \frac{(V_A - V_B) + \sum (I_i \cdot R_{i,B})}{R_{total}}")
-        st.write("El punto de mínima tensión es aquel donde las corrientes de ambos sentidos convergen (punto de corte).")
-        st.link_button("📘 Schneider: Guía de Diseño de Redes", "https://www.se.com/es/es/download/document/LVPED210007ES/")
-
+    i_b_contribution = moment_sum_a / l_total # Pure load contribution to Source B current
     
-
-    c1, c2, c3 = st.columns(3)
-    Ua, Ub, L_tot = c1.number_input("V_A (V)", 405.0), c2.number_input("V_B (V)", 400.0), c3.number_input("L (m)", 500.0)
-    df_loads = st.data_editor(pd.DataFrame([{"Distancia (m)": 100, "Carga (A)": 40}, {"Distancia (m)": 350, "Carga (A)": 30}]), num_rows="dynamic")
+    # Circulating current due to voltage diff: I_circ = (Ua - Ub) / (K * R_total) ?? 
+    # Usually drop = I*R. Here we use K factor. 
+    # Let's stick to simple superposition.
     
-    if st.button("Analizar Red"):
-        profile, Ia, Ib, mv, mvd = solve_dual_fed_network(Ua, Ub, L_tot, df_loads, 56, 70)
-        st.metric("Punto Crítico", f"{mv:.2f} V", f"a {mvd} m")
-        st.plotly_chart(plot_loading_diagram(profile, L_tot), use_container_width=True)
-
-def render_ring_tab():
-    st.subheader("3. Red en Anillo (J)")
+    # If Ua != Ub, we add the circulating term.
+    # Voltage drop across line due to circulating current: Ua - Ub = K * I_circ * R_total
+    # I_circ = (Ua - Ub) / (K * R_total)
+    i_circ = (u_a - u_b) / (k * r_total) if r_total > 0 else 0
     
-    with st.expander("📖 Fundamentos: Topología en Bucle Cerrado"):
-        st.markdown("Un anillo es un caso especial de doble alimentación donde $V_A = V_B$. Esto garantiza mayor fiabilidad, ya que cualquier carga puede ser alimentada por dos caminos:")
-        st.latex(r"I_{clockwise} = \frac{\sum (I_i \cdot L_{anti-clockwise, i})}{L_{total}}")
-        st.link_button("🌐 Manual de Redes de Distribución", "https://es.wikipedia.org/wiki/Red_de_distribuci%C3%B3n_de_energ%C3%ADa_el%C3%A9ctrica#Topolog%C3%ADas_de_redes_de_distribuci%C3%B3n")
-
+    i_b = i_b_contribution - i_circ
+    i_a = sum_currents - i_b
     
-
-    c1, c2 = st.columns(2)
-    Uf, Lr = c1.number_input("V_Alimentación (V)", 400.0), c2.number_input("Perímetro (m)", 1000.0)
-    df_loads = st.data_editor(pd.DataFrame([{"Distancia (m)": 200, "Carga (A)": 50}, {"Distancia (m)": 700, "Carga (A)": 40}]), num_rows="dynamic")
+    # Determine Split Point (Point of Minimum Voltage)
+    # We walk from A. Current decreases by load I at each node.
+    # The point where current crosses zero (changes direction) is the split point.
     
-    if st.button("Resolver Anillo"):
-        profile, Ia, Ib, mv, mvd = solve_dual_fed_network(Uf, Uf, Lr, df_loads, 56, 95)
-        col_l, col_r = st.columns([1, 2])
-        with col_l: st.success(f"V_min: {mv:.2f}V"); st.info(f"Ia: {Ia:.1f}A / Ib: {Ib:.1f}A")
-        with col_r: st.plotly_chart(plot_unifilar_ring(Lr, df_loads), use_container_width=True)
-
-def render_comparison_tab():
-    st.subheader("4. Comparativa Técnica/Económica")
+    current_flow = i_a
+    current_u = u_a
+    min_u = u_a
+    split_node_idx = -1
     
-    with st.expander("📖 Análisis de Coste de Ciclo de Vida (LCC)"):
-        st.markdown("La comparativa evalúa el compromiso entre la inversión inicial (CAPEX) y los costes operativos por pérdidas Joule (OPEX):")
-        st.latex(r"Coste_{total} = C_{cable} \cdot L + \int_{0}^{20y} (3 \cdot I^2(t) \cdot R \cdot Coste_{kWh}) dt")
-        st.link_button("📈 Eficiencia Energética (Leonardo Energy)", "https://leonardo-energy.org/resources/113/sizing-of-conductors-for-energy-efficiency-5807")
-
-    L_t, U_n = st.number_input("Longitud Total (m)", 800.0), st.number_input("Tensión Nom (V)", 400.0)
-    df_loads = st.data_editor(pd.DataFrame([{"Distancia (m)": 200, "Carga (A)": 50}, {"Distancia (m)": 600, "Carga (A)": 50}]))
+    profile = [{'Distance': 0, 'Voltage': u_a, 'Current_Flow': i_a}]
     
-    if st.button("Comparar Topologías"):
-        res_rad = solve_radial_network(U_n, df_loads, "Trifásica", 56, 95)
-        res_ring, _, _, mv_ring, _ = solve_dual_fed_network(U_n, U_n, L_t, df_loads, 56, 95)
-        c_r, o_r = calc_network_cost("Radial", L_t, df_loads, 56, 95, 1.5)
-        c_an, o_an = calc_network_cost("Anillo", L_t, df_loads, 56, 95, 1.5)
+    prev_dist = 0
+    
+    for idx, n in enumerate(nodes):
+        dist_seg = n['dist_source'] - prev_dist
+        r_seg = dist_seg / (sigma * section)
         
-        st.plotly_chart(px.bar(pd.DataFrame({
-            "Topología": ["Radial", "Radial", "Anillo", "Anillo"],
-            "Tipo": ["CAPEX", "OPEX", "CAPEX", "OPEX"],
-            "Euros": [c_r, o_r, c_an, o_an]
-        }), x="Topología", y="Euros", color="Tipo", barmode="stack"))
+        # Drop = K * I * R * cos_phi
+        drop = k * current_flow * r_seg * n['cos_phi']
+        current_u -= drop
+        
+        if current_u < min_u:
+            min_u = current_u
+            split_node_idx = idx
+            
+        profile.append({
+            'Distance': n['dist_source'],
+            'Voltage': current_u,
+            'Current_Flow': current_flow
+        })
+        
+        prev_dist = n['dist_source']
+        current_flow -= n['current']
+        
+    # Final segment to B
+    dist_seg = l_total - prev_dist
+    r_seg = dist_seg / (sigma * section)
+    # Note: flow here should be equal to -i_b ideally
+    current_u -= k * current_flow * r_seg * 1.0 # Assuming cos=1 for line or prev load
+    
+    profile.append({'Distance': l_total, 'Voltage': u_b, 'Current_Flow': current_flow})
+    
+    return pd.DataFrame(profile), i_a, i_b, min_u
+
+# ==============================================================================
+# UI COMPONENTS
+# ==============================================================================
 
 def app():
-    st.header("Network Topology & Dimensioning")
-    t1, t2, t3, t4 = st.tabs(["1. Radial (H)", "2. Doble Alimentación (I)", "3. Anillo (J)", "4. Comparativa"])
-    with t1: render_radial_tab()
-    with t2: render_dualfed_tab()
-    with t3: render_ring_tab()
-    with t4: render_comparison_tab()
+    st.title("Week 3: Network Topology & Dimensioning")
+    
+    # --- Sidebar: Global Configuration ---
+    with st.sidebar:
+        st.header("Global Parameters")
+        topology = st.selectbox("Topology Type", ["Radial", "Dual-Fed (Two Sources)", "Ring (Closed Loop)"])
+        
+        st.subheader("System Specs")
+        u_nom = st.number_input("Source Voltage (V)", value=400.0, step=10.0)
+        f_hz = st.number_input("Frequency (Hz)", value=50.0)
+        phase_type = st.radio("System Type", ["Three-phase", "Single-phase"])
+        
+        st.subheader("Cabling")
+        material = st.selectbox("Conductor Material", ["Copper (Cu)", "Aluminum (Al)"])
+        sigma = 56.0 if material == "Copper (Cu)" else 35.0
+        st.caption(f"Conductivity (σ): {sigma} m/(Ω·mm²)")
+        
+        max_drop = st.slider("Max Voltage Drop (%)", 0.5, 10.0, 5.0)
+
+    # --- Main Input Area ---
+    st.markdown("### 1. Network Configuration")
+    st.info("Define loads. For 'Distance', enter the length from the **previous node** (or source for the first load).")
+
+    # Dynamic Data Editor for Loads
+    # Default data structure
+    default_data = [
+        {"Dist_Prev (m)": 50, "Power (kW)": 15, "Cos_Phi": 0.9},
+        {"Dist_Prev (m)": 100, "Power (kW)": 25, "Cos_Phi": 0.85},
+        {"Dist_Prev (m)": 80, "Power (kW)": 10, "Cos_Phi": 0.95}
+    ]
+    
+    df_input = st.data_editor(
+        pd.DataFrame(default_data),
+        num_rows="dynamic",
+        column_config={
+            "Dist_Prev (m)": st.column_config.NumberColumn("Dist from Prev (m)", min_value=1, format="%d m"),
+            "Power (kW)": st.column_config.NumberColumn("Active Power (kW)", min_value=0),
+            "Cos_Phi": st.column_config.NumberColumn("Power Factor", min_value=0.1, max_value=1.0, step=0.01)
+        }
+    )
+
+    # Additional Inputs based on Topology
+    l_total = 0
+    u_b = u_nom
+    
+    if topology in ["Dual-Fed (Two Sources)", "Ring (Closed Loop)"]:
+        st.markdown("### 2. Dual-Feed / Ring Parameters")
+        c1, c2 = st.columns(2)
+        
+        # Calculate derived total length from nodes to check consistency
+        derived_len = df_input["Dist_Prev (m)"].sum() if not df_input.empty else 0
+        
+        with c1:
+            l_total = st.number_input("Total Line Length (m)", value=float(derived_len + 50), min_value=float(derived_len))
+            st.caption(f"Note: Sum of load distances is {derived_len} m. Total length must be >= this.")
+        
+        if topology == "Dual-Fed (Two Sources)":
+            with c2:
+                u_b = st.number_input("Voltage Source B (V)", value=u_nom)
+        else:
+            # Ring: UA = UB
+            u_b = u_nom
+            st.caption(f"Ring Topology: Source A = Source B = {u_nom} V")
+
+    # --- Processing & Calculation ---
+    if st.button("Run Dimensioning & Analysis", type="primary"):
+        if df_input.empty:
+            st.error("Please add at least one load.")
+            return
+
+        # 1. Pre-process Data
+        # Calculate Currents and Cumulative Distances
+        nodes = []
+        cum_dist = 0
+        
+        for _, row in df_input.iterrows():
+            d_prev = row["Dist_Prev (m)"]
+            p_kw = row["Power (kW)"]
+            cos_phi = row["Cos_Phi"]
+            
+            # Calculate Current
+            i_load = calculate_current(p_kw, u_nom, cos_phi, phase_type)
+            
+            cum_dist += d_prev
+            nodes.append({
+                'dist_prev': d_prev,
+                'dist_source': cum_dist, # dk
+                'power': p_kw,
+                'cos_phi': cos_phi,
+                'current': i_load
+            })
+
+        # Calculate Totals for Moments
+        moment_sum = sum(n['current'] * n['dist_source'] for n in nodes) # Sum(i_k * L_k)
+        total_load_current = sum(n['current'] for n in nodes)
+        weighted_cos_phi = np.average([n['cos_phi'] for n in nodes], weights=[n['current'] for n in nodes]) if nodes else 0.9
+
+        # --- Tab 1: Sizing Recommendation (Eq 8/9) ---
+        st.divider()
+        t1, t2 = st.tabs(["📐 Sizing & Dimensions", "📊 Analysis & Voltage Profile"])
+        
+        with t1:
+            st.subheader("Cross-Section Sizing")
+            st.markdown("Based on **Week 3 Formulas** (Eq. 8 & 9) and Electrical Moments.")
+            
+            # Calculate required section based on Max Drop
+            req_section = suggest_cross_section(moment_sum, u_nom, max_drop, sigma, phase_type, weighted_cos_phi)
+            
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total Load Current", f"{total_load_current:.2f} A")
+            c1.metric("Electrical Moment", f"{moment_sum/1000:.2f} kA·m")
+            c2.metric("Target Max Drop", f"{max_drop}% ({u_nom * max_drop/100:.2f} V)")
+            c3.metric("Calculated Min Section", f"{req_section:.2f} mm²", delta="Theoretical", delta_color="off")
+            
+            # Standard Section Selector
+            std_sections = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240]
+            
+            # Find closest standard upper
+            rec_std = next((s for s in std_sections if s >= req_section), std_sections[-1])
+            
+            st.markdown(f"**Recommendation:** Select standard cable **{rec_std} mm²**")
+            selected_section = st.select_slider("Select Cross-Section for Analysis:", options=std_sections, value=rec_std)
+
+        # --- Tab 2: Analysis ---
+        with t2:
+            st.subheader(f"Analysis: {topology}")
+            
+            if topology == "Radial":
+                # Radial Analysis
+                res_df = solve_radial_profile(u_nom, nodes, sigma, selected_section, phase_type)
+                
+                # Metrics
+                v_min = res_df['Voltage'].min()
+                v_drop_abs = u_nom - v_min
+                v_drop_pct = (v_drop_abs / u_nom) * 100
+                
+                c_a, c_b = st.columns(2)
+                c_a.metric("Min Voltage", f"{v_min:.2f} V")
+                c_b.metric("Total Drop", f"{v_drop_pct:.2f}%", delta_color="inverse" if v_drop_pct > max_drop else "normal")
+                
+                # Plot
+                fig = px.line(res_df, x='Distance', y='Voltage', markers=True, title=f"Voltage Profile (Radial, {selected_section} mm²)")
+                fig.add_hline(y=u_nom * (1 - max_drop/100), line_dash="dash", line_color="red", annotation_text="Limit")
+                st.plotly_chart(fig, use_container_width=True)
+                
+            else:
+                # Dual-Fed / Ring Analysis
+                res_df, ia, ib, v_min = solve_dual_fed(u_nom, u_b, l_total, nodes, sigma, selected_section, phase_type)
+                
+                v_drop_abs = u_nom - v_min
+                v_drop_pct = (v_drop_abs / u_nom) * 100
+                
+                # Metrics
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Current Source A (Ia)", f"{ia:.2f} A")
+                c2.metric("Current Source B (Ib)", f"{ib:.2f} A")
+                c3.metric("Min Voltage Point", f"{v_min:.2f} V")
+                
+                if abs(ia) > selected_section * 5: # Crude ampacity check
+                    st.warning(f"⚠️ Warning: Current Ia ({ia:.1f}A) might exceed ampacity for {selected_section}mm²")
+
+                # Plot
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=res_df['Distance'], y=res_df['Voltage'], mode='lines+markers', name='Voltage Profile', line=dict(color='#00ADB5', width=3)))
+                
+                # Add source markers
+                fig.add_trace(go.Scatter(x=[0], y=[u_nom], mode='markers', marker=dict(size=12, color='red'), name='Source A'))
+                fig.add_trace(go.Scatter(x=[l_total], y=[u_b], mode='markers', marker=dict(size=12, color='orange'), name='Source B'))
+                
+                fig.update_layout(title="Voltage Profile (Dual-Fed / Ring)", xaxis_title="Distance (m)", yaxis_title="Voltage (V)")
+                fig.add_hline(y=u_nom * (1 - max_drop/100), line_dash="dash", line_color="red", annotation_text="Limit")
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Current Distribution Plot
+                fig2 = px.area(res_df, x='Distance', y='Current_Flow', title="Current Flow Distribution")
+                st.plotly_chart(fig2, use_container_width=True)
+
+    st.markdown("---")
+    st.caption("Reference: University of Almería - Week 3: Network Topology and Dimensioning")
