@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-#enrique attemp 5
+#enrique attempt 6
 # ==============================================================================
 # HELPER FUNCTIONS: ELECTRICAL CALCULATIONS
 # ==============================================================================
@@ -164,9 +164,98 @@ def solve_dual_fed(u_a, u_b, l_total, nodes, sigma, section, phase_type):
 # HELPER FUNCTIONS: VISUALIZATION
 # ==============================================================================
 
+def draw_ring_schematic_circular(nodes, l_total, u_a):
+    """
+    Generates a Circular Diagram for Ring Topology with Source A at top.
+    """
+    fig = go.Figure()
+    radius = 1.0
+
+    # 1. Draw the Ring (Circle)
+    theta = np.linspace(0, 2*np.pi, 100)
+    x_ring = radius * np.cos(theta)
+    y_ring = radius * np.sin(theta)
+
+    fig.add_trace(go.Scatter(
+        x=x_ring, y=y_ring,
+        mode='lines',
+        line=dict(color='black', width=3),
+        name='Ring Line',
+        hoverinfo='skip'
+    ))
+
+    # 2. Source A (At top: 90 degrees or pi/2)
+    fig.add_trace(go.Scatter(
+        x=[0], y=[radius],
+        mode='markers+text',
+        marker=dict(symbol='square', size=25, color='#FF5733', line=dict(color='black', width=2)),
+        text=[f"<b>Source A</b><br>{u_a}V"],
+        textposition='top center',
+        name='Source A'
+    ))
+
+    # 3. Loads
+    # Map distance to angle: Start at Top (pi/2) and go Clockwise
+    node_x = []
+    node_y = []
+    text_x = []
+    text_y = []
+    node_text = []
+
+    for i, n in enumerate(nodes):
+        # Calculate angle
+        angle = (np.pi / 2) - (n['dist_source'] / l_total) * (2 * np.pi)
+        
+        # Node coordinates
+        nx = radius * np.cos(angle)
+        ny = radius * np.sin(angle)
+        node_x.append(nx)
+        node_y.append(ny)
+        
+        # Annotation coordinates (slightly outside the circle)
+        tx = (radius + 0.2) * np.cos(angle)
+        ty = (radius + 0.2) * np.sin(angle)
+        text_x.append(tx)
+        text_y.append(ty)
+        
+        node_text.append(f"<b>L{i+1}</b><br>{n['power']}kW")
+
+    # Draw Nodes
+    fig.add_trace(go.Scatter(
+        x=node_x, y=node_y,
+        mode='markers',
+        marker=dict(symbol='triangle-down', size=15, color='#00ADB5', line=dict(color='black', width=1)),
+        hoverinfo='text',
+        hovertext=[f"Load {i+1}: {n['power']}kW" for i, n in enumerate(nodes)],
+        name='Loads'
+    ))
+    
+    # Add Text Annotations
+    for i in range(len(nodes)):
+        fig.add_annotation(
+            x=text_x[i], y=text_y[i],
+            text=node_text[i],
+            showarrow=False,
+            font=dict(size=10, color="#333")
+        )
+
+    # Layout
+    fig.update_layout(
+        title="Ring Topology (Circular Schematic)",
+        xaxis=dict(visible=False, range=[-1.5, 1.5], scaleanchor="y"),
+        yaxis=dict(visible=False, range=[-1.5, 1.5]),
+        height=400,
+        plot_bgcolor="white",
+        margin=dict(l=20, r=20, t=40, b=20),
+        showlegend=False
+    )
+    
+    return fig
+
 def draw_network_schematic(topology, nodes, l_total, u_a, u_b):
     """
     Generates a Unifilar Diagram (Schematic) of the network.
+    For Ring networks, it shows Source A at both ends.
     """
     fig = go.Figure()
     
@@ -174,7 +263,7 @@ def draw_network_schematic(topology, nodes, l_total, u_a, u_b):
     if topology == "Radial networks":
         max_dist = nodes[-1]['dist_source'] if nodes else 100
     else:
-        max_dist = l_total if l_total > 0 else 100  # Fallback to prevent 0 range
+        max_dist = l_total if l_total > 0 else 100
 
     # 1. Main Feeder Line (Bus)
     fig.add_trace(go.Scatter(
@@ -185,7 +274,7 @@ def draw_network_schematic(topology, nodes, l_total, u_a, u_b):
         hoverinfo='skip'
     ))
 
-    # 2. Source A
+    # 2. Source A (Start)
     fig.add_trace(go.Scatter(
         x=[0], y=[0],
         mode='markers+text',
@@ -195,15 +284,23 @@ def draw_network_schematic(topology, nodes, l_total, u_a, u_b):
         name='Source A'
     ))
 
-    # 3. Source B (if applicable)
+    # 3. Source B / End Point (if applicable)
     if topology != "Radial networks":
+        # Handle label for Ring vs Dual-Fed
+        if topology == "Ring networks":
+            label = f"<b>Source A</b><br>{u_a}V" # Same source at end
+            color = '#FF5733' # Same color as Source A
+        else:
+            label = f"<b>Source B</b><br>{u_b}V"
+            color = '#FFC300'
+
         fig.add_trace(go.Scatter(
             x=[max_dist], y=[0],
             mode='markers+text',
-            marker=dict(symbol='square', size=25, color='#FFC300', line=dict(color='black', width=2)),
-            text=[f"<b>Source B</b><br>{u_b}V"],
+            marker=dict(symbol='square', size=25, color=color, line=dict(color='black', width=2)),
+            text=[label],
             textposition='top center',
-            name='Source B'
+            name='End Source'
         ))
 
     # 4. Loads (Schematic representation)
@@ -221,7 +318,6 @@ def draw_network_schematic(topology, nodes, l_total, u_a, u_b):
 
     # Vertical lines for loads (Standard unifilar style)
     for i, n in enumerate(nodes):
-        # Line dropping down
         fig.add_shape(
             type="line",
             x0=n['dist_source'], y0=0, 
@@ -229,7 +325,6 @@ def draw_network_schematic(topology, nodes, l_total, u_a, u_b):
             line=dict(color="black", width=2)
         )
         
-        # Arrowhead or Load Symbol at bottom
         fig.add_trace(go.Scatter(
             x=[n['dist_source']], y=[-0.5],
             mode='markers',
@@ -238,7 +333,6 @@ def draw_network_schematic(topology, nodes, l_total, u_a, u_b):
             hoverinfo='skip'
         ))
         
-        # Text Annotation below load
         fig.add_annotation(
             x=n['dist_source'], y=-0.6,
             text=f"<b>L{i+1}</b><br>{n['power']} kW<br>cosφ {n['cos_phi']}",
@@ -247,9 +341,12 @@ def draw_network_schematic(topology, nodes, l_total, u_a, u_b):
             font=dict(size=10, color="#333")
         )
 
-    # Layout
+    title_text = "Network Schematic (Linear View)"
+    if topology == "Ring networks":
+        title_text = "Ring Topology (Linear Representation)"
+
     fig.update_layout(
-        title="Network Schematic (Unifilar Diagram)",
+        title=title_text,
         xaxis=dict(title="Distance (m)", range=[-max_dist*0.1, max_dist*1.1], showgrid=False, zeroline=False),
         yaxis=dict(visible=False, range=[-1.5, 1]),
         height=350,
@@ -276,7 +373,6 @@ def app():
         
         with col1:
             st.subheader("Topology")
-            # Updated Topology Options (Added key to force refresh)
             topology = st.selectbox("Topology Type", [
                 "Radial networks", 
                 "Networks fed from both ends", 
@@ -396,15 +492,12 @@ def app():
             st.markdown("Comparison between **Selected Section** (Top Panel) and **Theoretical Minimum** (Eq. 8 & 9).")
             
             req_section = suggest_cross_section(moment_active_sum, u_nom, max_drop, sigma, phase_type)
-            
-            # Find closest standard upper for recommendation
             rec_std = next((s for s in std_sections if s >= req_section), std_sections[-1])
             
             c1, c2, c3 = st.columns(3)
             c1.metric("Selected Section", f"{selected_section} mm²")
             c2.metric("Required Minimum", f"{req_section:.2f} mm²", help="Theoretical value to meet Max Voltage Drop exactly")
             
-            # Status Check
             if selected_section >= req_section:
                  c3.success(f"✅ Compliant (Rec: {rec_std} mm²)")
             else:
@@ -421,9 +514,21 @@ def app():
         with t2:
             st.subheader(f"Analysis: {topology}")
             
-            # Schematic Diagram
-            schematic_fig = draw_network_schematic(topology, nodes, l_total, u_nom, u_b)
-            st.plotly_chart(schematic_fig, use_container_width=True)
+            # DIAGRAM GENERATION LOGIC
+            # If Ring: Show both Circular and Linear (with Source A at both ends)
+            if topology == "Ring networks":
+                st.write("#### 1. Circular Diagram")
+                circ_fig = draw_ring_schematic_circular(nodes, l_total, u_nom)
+                st.plotly_chart(circ_fig, use_container_width=True)
+                
+                st.write("#### 2. Linear Unfolded Diagram")
+                # Passes u_nom for both u_a and u_b, allowing draw_network_schematic to handle the labels
+                linear_fig = draw_network_schematic(topology, nodes, l_total, u_nom, u_nom)
+                st.plotly_chart(linear_fig, use_container_width=True)
+            else:
+                # Radial or Dual-Fed
+                schematic_fig = draw_network_schematic(topology, nodes, l_total, u_nom, u_b)
+                st.plotly_chart(schematic_fig, use_container_width=True)
             
             if topology == "Radial networks":
                 res_df = solve_radial_profile(u_nom, nodes, sigma, selected_section, phase_type)
@@ -454,14 +559,17 @@ def app():
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=res_df['Distance'], y=res_df['Voltage'], mode='lines+markers', name='Voltage', line=dict(color='#00ADB5', width=3)))
                 fig.add_trace(go.Scatter(x=[0], y=[u_nom], mode='markers', marker=dict(size=12, color='red'), name='Source A'))
-                fig.add_trace(go.Scatter(x=[l_total], y=[u_b], mode='markers', marker=dict(size=12, color='orange'), name='Source B'))
+                # Handle plot marker for Source B/End
+                end_name = "Source A (End)" if topology == "Ring networks" else "Source B"
+                end_color = 'red' if topology == "Ring networks" else 'orange'
+                fig.add_trace(go.Scatter(x=[l_total], y=[u_b], mode='markers', marker=dict(size=12, color=end_color), name=end_name))
+                
                 fig.update_layout(title="Voltage Profile", xaxis_title="Distance (m)", yaxis_title="Voltage (V)")
                 fig.add_hline(y=u_nom * (1 - max_drop/100), line_dash="dash", line_color="red", annotation_text="Limit")
                 st.plotly_chart(fig, use_container_width=True)
                 
-                # Updated Current Distribution Plot with step shape 'hv'
+                # Updated Current Distribution Plot
                 fig2 = px.area(res_df, x='Distance', y='Current_Flow_Mag', title="Current Flow Distribution (Approx Magnitude)")
-                # Force 'hv' (step) interpolation to show constant flow between loads
                 fig2.update_traces(line_shape='hv')
                 st.plotly_chart(fig2, use_container_width=True)
 
