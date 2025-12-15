@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-#week 3 attempt 2
+#enrique attempt 3
 # ==============================================================================
 # HELPER FUNCTIONS: ELECTRICAL CALCULATIONS
 # ==============================================================================
@@ -19,19 +19,6 @@ def get_k_factor(phase_type):
 def calculate_load_currents(p_kw, u_volts, cos_phi, phase_type):
     """
     Calculates Magnitude Current (I) and Active Current (I_active).
-    
-    Active Current (I_active = I * cos_phi) is used for Voltage Drop on resistive lines.
-    Magnitude Current (I) is used for Ampacity (Heating) checks.
-    
-    Formulas:
-    3-Phase: P = sqrt(3) * U * I * cos_phi  => I_active = P / (sqrt(3) * U) * (sqrt(3)?? No)
-             I_active = I * cos_phi = P / (sqrt(3) * U) ? No.
-             P = sqrt(3) * U * I_active_component_of_line_current? 
-             Actually: Drop = sqrt(3) * R * (I * cos_phi).
-             And I * cos_phi = (P_kw * 1000) / (sqrt(3) * U).
-             
-    1-Phase: P = U * I * cos_phi
-             I_active = I * cos_phi = (P_kw * 1000) / U.
     """
     if u_volts == 0:
         return 0.0, 0.0
@@ -52,9 +39,6 @@ def calculate_load_currents(p_kw, u_volts, cos_phi, phase_type):
 def suggest_cross_section(moment_active_sum, u_source, max_drop_percent, sigma, phase_type):
     """
     Calculates required cross-section S based on max allowed voltage drop.
-    Uses the Active Moment (Sum of P_k * L_k converted to Active Current moments).
-    
-    S = (K * Sum(I_active * L)) / (sigma * DeltaU)
     """
     delta_u_max = u_source * (max_drop_percent / 100.0)
     k = get_k_factor(phase_type)
@@ -77,7 +61,7 @@ def solve_radial_profile(u_source, nodes, sigma, section, phase_type):
     
     # Sum of currents downstream
     total_active_current = sum(n['i_active'] for n in nodes)
-    total_mag_current = sum(n['i_mag'] for n in nodes) # Conservative approximation (arithmetic sum)
+    total_mag_current = sum(n['i_mag'] for n in nodes) 
     
     current_flow_active = total_active_current
     current_flow_mag = total_mag_current
@@ -85,9 +69,6 @@ def solve_radial_profile(u_source, nodes, sigma, section, phase_type):
     cum_dist = 0
     
     for n in nodes:
-        # R = L / (sigma * S)
-        # Drop = K * I_active * R (Assuming negligible reactance X)
-        
         r_segment = n['dist_prev'] / (sigma * section)
         drop_segment = k * current_flow_active * r_segment
         
@@ -113,22 +94,18 @@ def solve_dual_fed(u_a, u_b, l_total, nodes, sigma, section, phase_type):
     k = get_k_factor(phase_type)
     r_total = l_total / (sigma * section)
     
-    # Calculate Moments based on Active Current (for Voltage Drop physics)
+    # Calculate Moments based on Active Current
     moment_sum_active_a = sum(n['i_active'] * n['dist_source'] for n in nodes)
     sum_i_active = sum(n['i_active'] for n in nodes)
     
     # Calculate Ia (Active Component)
-    # Iy = Sum(i_k * d_k) / L
     i_b_active_contrib = moment_sum_active_a / l_total
-    
-    # Circulating current (Active component due to voltage difference)
     i_circ_active = (u_a - u_b) / (k * r_total) if r_total > 0 else 0
     
     i_b_active = i_b_active_contrib - i_circ_active
     i_a_active = sum_i_active - i_b_active
     
-    # For Ampacity checks, we'll estimate Magnitude based on similar ratio 
-    # (Simplified: assuming power factors are similar, scalar ratio holds)
+    # Estimate Magnitude
     sum_i_mag = sum(n['i_mag'] for n in nodes)
     ratio_mag = sum_i_mag / sum_i_active if sum_i_active != 0 else 1.0
     i_a_mag = i_a_active * ratio_mag
@@ -138,7 +115,6 @@ def solve_dual_fed(u_a, u_b, l_total, nodes, sigma, section, phase_type):
     current_flow_active = i_a_active
     current_u = u_a
     min_u = u_a
-    split_node_idx = -1
     
     profile = [{'Distance': 0, 'Voltage': u_a, 'Current_Flow_Mag': i_a_mag}]
     prev_dist = 0
@@ -147,16 +123,13 @@ def solve_dual_fed(u_a, u_b, l_total, nodes, sigma, section, phase_type):
         dist_seg = n['dist_source'] - prev_dist
         r_seg = dist_seg / (sigma * section)
         
-        # Drop based on Active Current
         drop = k * current_flow_active * r_seg
         current_u -= drop
         
         if current_u < min_u:
             min_u = current_u
-            split_node_idx = idx
             
         current_flow_active -= n['i_active']
-        # Estimate magnitude flow for plotting
         current_flow_mag = current_flow_active * ratio_mag 
         
         profile.append({
@@ -177,6 +150,107 @@ def solve_dual_fed(u_a, u_b, l_total, nodes, sigma, section, phase_type):
     return pd.DataFrame(profile), i_a_mag, i_b_mag, min_u
 
 # ==============================================================================
+# HELPER FUNCTIONS: VISUALIZATION
+# ==============================================================================
+
+def draw_network_schematic(topology, nodes, l_total, u_a, u_b):
+    """
+    Generates a Unifilar Diagram (Schematic) of the network.
+    """
+    fig = go.Figure()
+    
+    # Define End Point
+    if topology == "Radial networks":
+        max_dist = nodes[-1]['dist_source'] if nodes else 100
+    else:
+        max_dist = l_total
+
+    # 1. Main Feeder Line (Bus)
+    fig.add_trace(go.Scatter(
+        x=[0, max_dist], y=[0, 0],
+        mode='lines',
+        line=dict(color='black', width=5),
+        name='Main Line',
+        hoverinfo='skip'
+    ))
+
+    # 2. Source A
+    fig.add_trace(go.Scatter(
+        x=[0], y=[0],
+        mode='markers+text',
+        marker=dict(symbol='square', size=25, color='#FF5733', line=dict(color='black', width=2)),
+        text=[f"<b>Source A</b><br>{u_a}V"],
+        textposition='top center',
+        name='Source A'
+    ))
+
+    # 3. Source B (if applicable)
+    if topology != "Radial networks":
+        fig.add_trace(go.Scatter(
+            x=[max_dist], y=[0],
+            mode='markers+text',
+            marker=dict(symbol='square', size=25, color='#FFC300', line=dict(color='black', width=2)),
+            text=[f"<b>Source B</b><br>{u_b}V"],
+            textposition='top center',
+            name='Source B'
+        ))
+
+    # 4. Loads (Schematic representation)
+    node_x = [n['dist_source'] for n in nodes]
+    node_y = [0] * len(nodes)
+    
+    # Load Markers on the line
+    fig.add_trace(go.Scatter(
+        x=node_x, y=node_y,
+        mode='markers',
+        marker=dict(size=10, color='black'),
+        showlegend=False,
+        hoverinfo='skip'
+    ))
+
+    # Vertical lines for loads (Standard unifilar style)
+    for i, n in enumerate(nodes):
+        # Line dropping down
+        fig.add_shape(
+            type="line",
+            x0=n['dist_source'], y0=0, 
+            x1=n['dist_source'], y1=-0.5,
+            line=dict(color="black", width=2)
+        )
+        
+        # Arrowhead or Load Symbol at bottom
+        fig.add_trace(go.Scatter(
+            x=[n['dist_source']], y=[-0.5],
+            mode='markers',
+            marker=dict(symbol='triangle-down', size=15, color='#00ADB5'),
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+        
+        # Text Annotation below load
+        fig.add_annotation(
+            x=n['dist_source'], y=-0.6,
+            text=f"<b>L{i+1}</b><br>{n['power']} kW<br>cosφ {n['cos_phi']}",
+            showarrow=False,
+            yanchor="top",
+            font=dict(size=10, color="#333")
+        )
+
+    # Layout
+    fig.update_layout(
+        title="Network Schematic (Unifilar Diagram)",
+        xaxis=dict(title="Distance (m)", range=[-max_dist*0.1, max_dist*1.1], showgrid=False, zeroline=False),
+        yaxis=dict(visible=False, range=[-1.5, 1]),
+        height=350,
+        plot_bgcolor="white",
+        margin=dict(l=20, r=20, t=40, b=20),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    
+    return fig
+
+# ==============================================================================
 # UI COMPONENTS
 # ==============================================================================
 
@@ -186,23 +260,40 @@ def app():
     # --- Sidebar: Global Configuration ---
     with st.sidebar:
         st.header("Global Parameters")
-        topology = st.selectbox("Topology Type", ["Radial", "Dual-Fed (Two Sources)", "Ring (Closed Loop)"])
+        
+        # Updated Topology Options
+        topology = st.selectbox("Topology Type", [
+            "Radial networks", 
+            "Networks fed from both ends", 
+            "Ring networks", 
+            "Meshed networks"
+        ])
         
         st.subheader("System Specs")
         u_nom = st.number_input("Source Voltage (V)", value=400.0, step=10.0)
         f_hz = st.number_input("Frequency (Hz)", value=50.0)
         phase_type = st.radio("System Type", ["Three-phase", "Single-phase"])
         
-        st.subheader("Cabling")
+        st.subheader("Cabling Parameters")
         material = st.selectbox("Conductor Material", ["Copper (Cu)", "Aluminum (Al)"])
         sigma = 56.0 if material == "Copper (Cu)" else 35.0
         st.caption(f"Conductivity (σ): {sigma} m/(Ω·mm²)")
         
         max_drop = st.slider("Max Voltage Drop (%)", 0.5, 10.0, 5.0)
 
+        # Standard Sections moved to Sidebar
+        st.subheader("Cable Selection")
+        std_sections = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240]
+        selected_section = st.selectbox("Cross-Section (mm²)", options=std_sections, index=5)
+        st.info(f"Selected: {selected_section} mm²")
+
     # --- Main Input Area ---
     st.markdown("### 1. Network Configuration")
-    st.info("Define loads using **Active Power (kW)** and **Power Factor (Cos φ)**.")
+    
+    if topology == "Meshed networks":
+        st.info("Define nodes and branches for the meshed network (conceptual input).")
+    else:
+        st.info("Define loads using **Active Power (kW)** and **Power Factor (Cos φ)**.")
 
     # Dynamic Data Editor for Loads
     default_data = [
@@ -225,7 +316,7 @@ def app():
     l_total = 0
     u_b = u_nom
     
-    if topology in ["Dual-Fed (Two Sources)", "Ring (Closed Loop)"]:
+    if topology in ["Networks fed from both ends", "Ring networks"]:
         st.markdown("### 2. Dual-Feed / Ring Parameters")
         c1, c2 = st.columns(2)
         
@@ -234,7 +325,7 @@ def app():
         with c1:
             l_total = st.number_input("Total Line Length (m)", value=float(derived_len + 50), min_value=float(derived_len))
         
-        if topology == "Dual-Fed (Two Sources)":
+        if topology == "Networks fed from both ends":
             with c2:
                 u_b = st.number_input("Voltage Source B (V)", value=u_nom)
         else:
@@ -243,11 +334,16 @@ def app():
 
     # --- Processing & Calculation ---
     if st.button("Run Dimensioning & Analysis", type="primary"):
+        # Special Check for Meshed Networks
+        if topology == "Meshed networks":
+            st.warning("This analysis involves more complex software engineering and has been left out to ensure proper code compilation.")
+            return
+
         if df_input.empty:
             st.error("Please add at least one load.")
             return
 
-        # 1. Pre-process Data (Calculate I_mag and I_active)
+        # 1. Pre-process Data
         nodes = []
         cum_dist = 0
         
@@ -272,33 +368,45 @@ def app():
         moment_active_sum = sum(n['i_active'] * n['dist_source'] for n in nodes)
         total_load_current_mag = sum(n['i_mag'] for n in nodes)
 
-        # --- Tab 1: Sizing Recommendation ---
+        # --- Tab 1: Sizing Verification ---
         st.divider()
-        t1, t2 = st.tabs(["📐 Sizing & Dimensions", "📊 Analysis & Voltage Profile"])
+        t1, t2 = st.tabs(["📐 Sizing Check", "📊 Analysis & Diagrams"])
         
         with t1:
-            st.subheader("Cross-Section Sizing")
-            st.markdown("Based on **Week 3 Formulas** (Eq. 8 & 9) using Active Currents.")
+            st.subheader("Cross-Section Verification")
+            st.markdown("Comparison between **Selected Section** (Sidebar) and **Theoretical Minimum** (Eq. 8 & 9).")
             
             req_section = suggest_cross_section(moment_active_sum, u_nom, max_drop, sigma, phase_type)
             
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Total Load Current", f"{total_load_current_mag:.2f} A")
-            c1.metric("Active Electrical Moment", f"{moment_active_sum/1000:.2f} kA·m")
-            c2.metric("Target Max Drop", f"{max_drop}% ({u_nom * max_drop/100:.2f} V)")
-            c3.metric("Calculated Min Section", f"{req_section:.2f} mm²", delta="Theoretical", delta_color="off")
-            
-            std_sections = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240]
+            # Find closest standard upper for recommendation
             rec_std = next((s for s in std_sections if s >= req_section), std_sections[-1])
             
-            st.markdown(f"**Recommendation:** Select standard cable **{rec_std} mm²**")
-            selected_section = st.select_slider("Select Cross-Section for Analysis:", options=std_sections, value=rec_std)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Selected Section", f"{selected_section} mm²")
+            c2.metric("Required Minimum", f"{req_section:.2f} mm²", help="Theoretical value to meet Max Voltage Drop exactly")
+            
+            # Status Check
+            if selected_section >= req_section:
+                 c3.success(f"✅ Compliant (Rec: {rec_std} mm²)")
+            else:
+                 c3.error(f"❌ Undersized (Rec: {rec_std} mm²)")
+            
+            st.markdown(f"""
+            **Electrical Details:**
+            - **Total Active Moment:** {moment_active_sum/1000:.2f} kA·m
+            - **Total Load Current:** {total_load_current_mag:.2f} A
+            - **Target Drop:** {max_drop}% ({u_nom * max_drop/100:.2f} V)
+            """)
 
         # --- Tab 2: Analysis ---
         with t2:
             st.subheader(f"Analysis: {topology}")
             
-            if topology == "Radial":
+            # Schematic Diagram
+            schematic_fig = draw_network_schematic(topology, nodes, l_total, u_nom, u_b)
+            st.plotly_chart(schematic_fig, use_container_width=True)
+            
+            if topology == "Radial networks":
                 res_df = solve_radial_profile(u_nom, nodes, sigma, selected_section, phase_type)
                 
                 v_min = res_df['Voltage'].min()
@@ -313,6 +421,7 @@ def app():
                 st.plotly_chart(fig, use_container_width=True)
                 
             else:
+                # Common logic for Dual-Fed and Ring
                 res_df, ia, ib, v_min = solve_dual_fed(u_nom, u_b, l_total, nodes, sigma, selected_section, phase_type)
                 
                 c1, c2, c3 = st.columns(3)
