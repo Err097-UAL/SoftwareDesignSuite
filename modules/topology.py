@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-#attempt 9 current
+#attempt 10
 # ==============================================================================
 # HELPER FUNCTIONS: ELECTRICAL CALCULATIONS
 # ==============================================================================
@@ -546,10 +546,11 @@ def app():
                 fig.add_hline(y=u_nom * (1 - max_drop/100), line_dash="dash", line_color="red", annotation_text="Limit")
                 st.plotly_chart(fig, use_container_width=True, key="radial_volt_prof")
 
-                # Current Distribution Plot for Radial
-                fig2 = px.area(res_df, x='Distance', y='Section_Current_Mag', title="Current Flow Distribution (Approx Magnitude)")
-                fig2.update_traces(line_shape='hv')
-                st.plotly_chart(fig2, use_container_width=True, key="radial_curr_prof")
+                # Current Distribution Plot for Radial - ADDED EXPLICIT KEY AND CHECK
+                if not res_df.empty:
+                     fig2 = px.area(res_df, x='Distance', y='Section_Current_Mag', title="Current Flow Distribution (Approx Magnitude)")
+                     fig2.update_traces(line_shape='hv')
+                     st.plotly_chart(fig2, use_container_width=True, key="radial_curr_prof_v2")
                 
             else:
                 # Common logic for Dual-Fed and Ring
