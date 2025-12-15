@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-#enrique attempt 5
+#enrique attemp 5
 # ==============================================================================
 # HELPER FUNCTIONS: ELECTRICAL CALCULATIONS
 # ==============================================================================
@@ -52,28 +52,36 @@ def suggest_cross_section(moment_active_sum, u_source, max_drop_percent, sigma, 
 def solve_radial_profile(u_source, nodes, sigma, section, phase_type):
     """
     Calculates voltage profile using Active Currents for drop and Total Currents for flow.
+    Modified to ensure profile reflects step-changes in current at loads for plotting.
     """
     k = get_k_factor(phase_type)
     current_u = u_source
     
-    # Initialize profile
-    profile = [{'Distance': 0, 'Voltage': u_source, 'Drop_Seg': 0, 'Section_Current_Mag': 0}]
-    
-    # Sum of currents downstream
+    # Calculate totals
     total_active_current = sum(n['i_active'] for n in nodes)
     total_mag_current = sum(n['i_mag'] for n in nodes) 
     
     current_flow_active = total_active_current
     current_flow_mag = total_mag_current
     
+    # Initialize profile with starting conditions at Distance 0
+    # Current in the first segment is the Total Load Current
+    profile = [{'Distance': 0, 'Voltage': u_source, 'Drop_Seg': 0, 'Section_Current_Mag': current_flow_mag}]
+    
     cum_dist = 0
     
     for n in nodes:
         r_segment = n['dist_prev'] / (sigma * section)
+        # Drop is calculated based on flow in the segment arriving at this node
         drop_segment = k * current_flow_active * r_segment
         
         current_u -= drop_segment
         cum_dist += n['dist_prev']
+        
+        # Decrement current (load is tapped here)
+        # The profile point at this node represents the state starting the NEXT segment
+        current_flow_active -= n['i_active']
+        current_flow_mag -= n['i_mag']
         
         profile.append({
             'Distance': cum_dist,
@@ -81,9 +89,6 @@ def solve_radial_profile(u_source, nodes, sigma, section, phase_type):
             'Drop_Seg': drop_segment,
             'Section_Current_Mag': current_flow_mag
         })
-        
-        current_flow_active -= n['i_active']
-        current_flow_mag -= n['i_mag']
         
     return pd.DataFrame(profile)
 
@@ -116,6 +121,7 @@ def solve_dual_fed(u_a, u_b, l_total, nodes, sigma, section, phase_type):
     current_u = u_a
     min_u = u_a
     
+    # Initial Point
     profile = [{'Distance': 0, 'Voltage': u_a, 'Current_Flow_Mag': i_a_mag}]
     prev_dist = 0
     
@@ -132,6 +138,7 @@ def solve_dual_fed(u_a, u_b, l_total, nodes, sigma, section, phase_type):
         if current_u < min_u:
             min_u = current_u
             
+        # Update Flow for next segment
         current_flow_active -= n['i_active']
         current_flow_mag = current_flow_active * ratio_mag 
         
@@ -148,9 +155,7 @@ def solve_dual_fed(u_a, u_b, l_total, nodes, sigma, section, phase_type):
     r_seg = dist_seg / (sigma * section)
     current_u -= k * current_flow_active * r_seg
     
-    # Fix: Ensure final point reflects the flow INTO source B (negative), 
-    # not the positive source magnitude.
-    # At x=L, the flow is `current_flow_mag` (which should be approx -i_b_mag)
+    # The final point needs to reflect the current state arriving at B
     profile.append({'Distance': l_total, 'Voltage': u_b, 'Current_Flow_Mag': current_flow_mag})
     
     return pd.DataFrame(profile), i_a_mag, i_b_mag, min_u
@@ -454,7 +459,10 @@ def app():
                 fig.add_hline(y=u_nom * (1 - max_drop/100), line_dash="dash", line_color="red", annotation_text="Limit")
                 st.plotly_chart(fig, use_container_width=True)
                 
+                # Updated Current Distribution Plot with step shape 'hv'
                 fig2 = px.area(res_df, x='Distance', y='Current_Flow_Mag', title="Current Flow Distribution (Approx Magnitude)")
+                # Force 'hv' (step) interpolation to show constant flow between loads
+                fig2.update_traces(line_shape='hv')
                 st.plotly_chart(fig2, use_container_width=True)
 
     st.markdown("---")
