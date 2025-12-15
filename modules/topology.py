@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-#enrique attempt 4
+#enrique attempt 5
 # ==============================================================================
 # HELPER FUNCTIONS: ELECTRICAL CALCULATIONS
 # ==============================================================================
@@ -119,6 +119,9 @@ def solve_dual_fed(u_a, u_b, l_total, nodes, sigma, section, phase_type):
     profile = [{'Distance': 0, 'Voltage': u_a, 'Current_Flow_Mag': i_a_mag}]
     prev_dist = 0
     
+    # Track magnitude for plot continuity
+    current_flow_mag = i_a_mag 
+
     for idx, n in enumerate(nodes):
         dist_seg = n['dist_source'] - prev_dist
         r_seg = dist_seg / (sigma * section)
@@ -145,7 +148,10 @@ def solve_dual_fed(u_a, u_b, l_total, nodes, sigma, section, phase_type):
     r_seg = dist_seg / (sigma * section)
     current_u -= k * current_flow_active * r_seg
     
-    profile.append({'Distance': l_total, 'Voltage': u_b, 'Current_Flow_Mag': i_b_mag})
+    # Fix: Ensure final point reflects the flow INTO source B (negative), 
+    # not the positive source magnitude.
+    # At x=L, the flow is `current_flow_mag` (which should be approx -i_b_mag)
+    profile.append({'Distance': l_total, 'Voltage': u_b, 'Current_Flow_Mag': current_flow_mag})
     
     return pd.DataFrame(profile), i_a_mag, i_b_mag, min_u
 
