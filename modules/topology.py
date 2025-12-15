@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-#enrique attempt 3
+#enrique attempt 4
 # ==============================================================================
 # HELPER FUNCTIONS: ELECTRICAL CALCULATIONS
 # ==============================================================================
@@ -163,7 +163,7 @@ def draw_network_schematic(topology, nodes, l_total, u_a, u_b):
     if topology == "Radial networks":
         max_dist = nodes[-1]['dist_source'] if nodes else 100
     else:
-        max_dist = l_total
+        max_dist = l_total if l_total > 0 else 100  # Fallback to prevent 0 range
 
     # 1. Main Feeder Line (Bus)
     fig.add_trace(go.Scatter(
@@ -257,35 +257,43 @@ def draw_network_schematic(topology, nodes, l_total, u_a, u_b):
 def app():
     st.title("Week 3: Network Topology & Dimensioning")
     
-    # --- Sidebar: Global Configuration ---
-    with st.sidebar:
-        st.header("Global Parameters")
+    # --- Configuration Parameters (At the top of the page) ---
+    with st.expander("⚙️ Network & System Parameters", expanded=True):
+        st.markdown("### Global Configuration")
         
-        # Updated Topology Options
-        topology = st.selectbox("Topology Type", [
-            "Radial networks", 
-            "Networks fed from both ends", 
-            "Ring networks", 
-            "Meshed networks"
-        ])
+        col1, col2, col3 = st.columns(3)
         
-        st.subheader("System Specs")
-        u_nom = st.number_input("Source Voltage (V)", value=400.0, step=10.0)
-        f_hz = st.number_input("Frequency (Hz)", value=50.0)
-        phase_type = st.radio("System Type", ["Three-phase", "Single-phase"])
-        
-        st.subheader("Cabling Parameters")
-        material = st.selectbox("Conductor Material", ["Copper (Cu)", "Aluminum (Al)"])
-        sigma = 56.0 if material == "Copper (Cu)" else 35.0
-        st.caption(f"Conductivity (σ): {sigma} m/(Ω·mm²)")
-        
-        max_drop = st.slider("Max Voltage Drop (%)", 0.5, 10.0, 5.0)
+        with col1:
+            st.subheader("Topology")
+            # Updated Topology Options (Added key to force refresh)
+            topology = st.selectbox("Topology Type", [
+                "Radial networks", 
+                "Networks fed from both ends", 
+                "Ring networks", 
+                "Meshed networks"
+            ], key="topology_selector")
+            
+            phase_type = st.radio("System Type", ["Three-phase", "Single-phase"])
 
-        # Standard Sections moved to Sidebar
-        st.subheader("Cable Selection")
-        std_sections = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240]
-        selected_section = st.selectbox("Cross-Section (mm²)", options=std_sections, index=5)
-        st.info(f"Selected: {selected_section} mm²")
+        with col2:
+            st.subheader("System Specs")
+            u_nom = st.number_input("Source Voltage (V)", value=400.0, step=10.0)
+            f_hz = st.number_input("Frequency (Hz)", value=50.0)
+            
+            st.subheader("Cabling")
+            material = st.selectbox("Conductor Material", ["Copper (Cu)", "Aluminum (Al)"])
+            sigma = 56.0 if material == "Copper (Cu)" else 35.0
+            st.caption(f"Conductivity (σ): {sigma} m/(Ω·mm²)")
+            
+        with col3:
+            st.subheader("Dimensioning")
+            max_drop = st.slider("Max Voltage Drop (%)", 0.5, 10.0, 5.0)
+            
+            # Standard Sections
+            st.markdown("**Cable Selection**")
+            std_sections = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240]
+            selected_section = st.selectbox("Cross-Section (mm²)", options=std_sections, index=5)
+            st.info(f"Selected: {selected_section} mm²")
 
     # --- Main Input Area ---
     st.markdown("### 1. Network Configuration")
@@ -374,7 +382,7 @@ def app():
         
         with t1:
             st.subheader("Cross-Section Verification")
-            st.markdown("Comparison between **Selected Section** (Sidebar) and **Theoretical Minimum** (Eq. 8 & 9).")
+            st.markdown("Comparison between **Selected Section** (Top Panel) and **Theoretical Minimum** (Eq. 8 & 9).")
             
             req_section = suggest_cross_section(moment_active_sum, u_nom, max_drop, sigma, phase_type)
             
