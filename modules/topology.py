@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-#attempt 10
+#commit 11
 # ==============================================================================
 # HELPER FUNCTIONS: ELECTRICAL CALCULATIONS
 # ==============================================================================
@@ -163,6 +163,88 @@ def solve_dual_fed(u_a, u_b, l_total, nodes, sigma, section, phase_type):
 # ==============================================================================
 # HELPER FUNCTIONS: VISUALIZATION
 # ==============================================================================
+
+def draw_meshed_schematic_static():
+    """
+    Generates a conceptual static diagram of a Meshed Network.
+    """
+    fig = go.Figure()
+
+    # Define Node Coordinates (Simple 2-Source, 3-Load Mesh)
+    # Sources
+    sx = [0, 4]
+    sy = [2, 2]
+    s_names = ["Source A", "Source B"]
+    
+    # Loads
+    lx = [0, 2, 4]
+    ly = [0, 1, 0]
+    l_names = ["L1", "L2", "L3"]
+
+    # Edges (Connections)
+    # Pairs of (x_start, x_end), (y_start, y_end)
+    edges_x = [
+        [0, 0], # SA -> L1
+        [0, 2], # SA -> L2
+        [4, 4], # SB -> L3
+        [4, 2], # SB -> L2
+        [0, 2], # L1 -> L2
+        [2, 4], # L2 -> L3
+        [0, 4], # L1 -> L3 (Base loop)
+    ]
+    edges_y = [
+        [2, 0], # SA -> L1
+        [2, 1], # SA -> L2
+        [2, 0], # SB -> L3
+        [2, 1], # SB -> L2
+        [0, 1], # L1 -> L2
+        [1, 0], # L2 -> L3
+        [0, 0], # L1 -> L3
+    ]
+
+    # Plot Edges
+    for i in range(len(edges_x)):
+        fig.add_trace(go.Scatter(
+            x=edges_x[i], y=edges_y[i],
+            mode='lines',
+            line=dict(color='black', width=2),
+            hoverinfo='skip',
+            showlegend=False
+        ))
+
+    # Plot Sources
+    fig.add_trace(go.Scatter(
+        x=sx, y=sy,
+        mode='markers+text',
+        marker=dict(symbol='square', size=25, color=['#FF5733', '#FFC300'], line=dict(color='black', width=2)),
+        text=s_names,
+        textposition='top center',
+        name='Sources',
+        hoverinfo='skip'
+    ))
+
+    # Plot Loads
+    fig.add_trace(go.Scatter(
+        x=lx, y=ly,
+        mode='markers+text',
+        marker=dict(symbol='triangle-down', size=20, color='#00ADB5', line=dict(color='black', width=1)),
+        text=l_names,
+        textposition='bottom center',
+        name='Loads',
+        hoverinfo='skip'
+    ))
+
+    fig.update_layout(
+        title="Meshed Topology (Conceptual Model)",
+        xaxis=dict(visible=False, range=[-1, 5]),
+        yaxis=dict(visible=False, range=[-1, 3]),
+        height=400,
+        plot_bgcolor="white",
+        margin=dict(l=20, r=20, t=40, b=20),
+        showlegend=False
+    )
+    
+    return fig
 
 def draw_ring_schematic_circular(nodes, l_total, u_a):
     """
@@ -408,7 +490,7 @@ def app():
     st.markdown("### 1. Network Configuration")
     
     if topology == "Meshed networks":
-        st.info("Define nodes and branches for the meshed network (conceptual input).")
+        st.info("Concept: Meshed networks involve multiple power sources and redundant paths to ensure high reliability.")
     else:
         st.info("Define loads using **Active Power (kW)** and **Power Factor (Cos φ)**.")
 
@@ -453,7 +535,12 @@ def app():
     if st.button("Run Dimensioning & Analysis", type="primary"):
         # Special Check for Meshed Networks
         if topology == "Meshed networks":
-            st.warning("This analysis involves more complex software engineering and has been left out to ensure proper code compilation.")
+            # Display Static Diagram
+            st.subheader("Analysis: Meshed Networks")
+            meshed_fig = draw_meshed_schematic_static()
+            st.plotly_chart(meshed_fig, use_container_width=True)
+            
+            st.warning("This analysis involves more complex software engineering (matrix methods/Newton-Raphson) and has been left out to ensure proper code compilation in this simplified tool.")
             return
 
         if df_input.empty:
