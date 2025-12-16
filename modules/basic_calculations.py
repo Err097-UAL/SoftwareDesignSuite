@@ -1,6 +1,6 @@
-# =================================================================================
-    # TAB 3: AISLAMIENTOS (Updated with Threshold Breakdown Model)
-    # =================================================================================
+# [INDENTATION GUIDE]
+    # The 'with' statement below should have 4 spaces of indentation.
+    # The content inside it should have 8 spaces.
 
     with tab_insulation:
         st.subheader("Comparativa Técnica: PVC vs XLPE")
@@ -13,7 +13,9 @@
             
             st.markdown("""
             ### 🌡️ Diferencias Térmicas
-            * **PVC (Termoplástico):** Se ablanda con el calor. Límite **70°C**.             * **XLPE (Termoestable):** Mantiene estructura. Límite **90°C**.             
+            * **PVC (Termoplástico):** Se ablanda con el calor. Límite **70°C**.
+            * **XLPE (Termoestable):** Mantiene estructura. Límite **90°C**.
+            
             ### 🔥 Comportamiento al Fuego
             * **PVC:** Emite humo negro y ácido (Corrosivo).
             * **XLPE (Libre de Halógenos):** Humo blanco, no tóxico.
@@ -40,7 +42,7 @@
             # --- EXPLICACIÓN MATEMÁTICA ACTUALIZADA ---
             st.markdown("##### Modelo de Degradación por Umbral (Threshold Breakdown)")
             
-            # Updated Text Explanation
+            # Updated Text Description
             st.write("This visualization uses a generic negative decay function ($y=y_1 - A \\cdot e^x$), commonly used in engineering to model behaviors where a material's property remains relatively constant until it reaches a critical threshold, after which it rapidly degrades.")
             
             st.latex(r"Integrity(T) = 100\% - A \cdot e^{k \cdot T}")
