@@ -301,7 +301,7 @@ def app():
             """)
 
 # =================================================================================
-    # TAB 3: AISLAMIENTOS (Updated with Engineering Decay Model)
+    # TAB 3: AISLAMIENTOS (Updated with Engineering Decay Model & Fixed Graph)
     # =================================================================================
 
     with tab_insulation:
@@ -352,42 +352,41 @@ def app():
                             "https://www.sciencedirect.com/topics/engineering/thermal-degradation")
 
         with col_plot:
-            # --- MODIFIED GRAPH LOGIC START ---
+            # --- MODIFIED GRAPH LOGIC START (FIXED DIAGONAL LINE) ---
             st.markdown("##### Modelo de Degradación de Integridad (Threshold Breakdown)")
             
             # 1. Update the formula display
             st.latex(r"y(x) = y_1 - A \cdot e^{x}")
             
-            # 2. Update the text description as requested
+            # 2. Update the text description
             st.write("This visualization uses a generic negative decay function ($y = y_1 - A \cdot e^x$), commonly used in engineering to model behaviors where a material's property remains relatively constant until it reaches a critical threshold, after which it rapidly degrades.")
             
             # 3. Implement the New Formula Logic
-            temp_range = np.arange(20, 140, 1) # Extended range to visualize the "crash" clearly
+            temp_range = np.arange(20, 140, 1) # Extended range
             
             y1 = 100.0  # Initial Integrity (100%)
             A = 0.05    # Scaling factor for the drop
             
-            # We map Temperature to 'x' to simulate the critical threshold behavior.
-            # Ideally, the exponent should become large enough to impact 'y' only near the limit.
-            
             # PVC Calculation (Target breakdown ~70-80°C)
-            # x is scaled such that exp(x) stays small until T approaches 70
             x_pvc = 0.11 * (temp_range - 20) 
             integrity_pvc = y1 - A * np.exp(x_pvc)
             
             # XLPE Calculation (Target breakdown ~90-100°C)
-            # We shift the curve to the right to represent higher thermal stability
             x_xlpe = 0.11 * (temp_range - 45)
             integrity_xlpe = y1 - A * np.exp(x_xlpe)
             
-            # Clean up data: Clip negative values to 0 for better visualization of failure
+            # Clean up data: Clip negative values to 0
             integrity_pvc = np.maximum(integrity_pvc, 0)
             integrity_xlpe = np.maximum(integrity_xlpe, 0)
+            
+            # --- FIX: Correctly constructing the lists so they don't mix ---
+            labels_pvc = ["PVC (Límite ~70°C)"] * len(temp_range)
+            labels_xlpe = ["XLPE (Límite ~90°C)"] * len(temp_range)
             
             df_iso = pd.DataFrame({
                 "Temperatura (°C)": np.concatenate([temp_range, temp_range]),
                 "Integridad Material (%)": np.concatenate([integrity_pvc, integrity_xlpe]),
-                "Tipo": ["PVC (Límite ~70°C)", "XLPE (Límite ~90°C)"] * len(temp_range)
+                "Tipo": labels_pvc + labels_xlpe # Concatenation, NOT multiplication
             })
             
             fig_iso = px.line(df_iso, x="Temperatura (°C)", y="Integridad Material (%)", 
@@ -398,7 +397,7 @@ def app():
             fig_iso.add_vline(x=70, line_dash="dash", line_color="#EF553B", annotation_text="Límite PVC")
             fig_iso.add_vline(x=90, line_dash="dash", line_color="#00CC96", annotation_text="Límite XLPE")
             
-            fig_iso.update_yaxes(range=[0, 110]) # Lock Y axis to keep focus on the drop
+            fig_iso.update_yaxes(range=[0, 110]) 
 
             st.plotly_chart(fig_iso, use_container_width=True)
             st.info("💡 **Observación:** El gráfico muestra cómo el material mantiene sus propiedades (zona plana) hasta superar su temperatura crítica, momento en el que la degradación se vuelve exponencial.")
@@ -601,4 +600,5 @@ def app():
             2. **Gil Carrillo, F.** (2015). *Líneas Eléctricas*. Universidad de Almería.
             3. **Leonardo Energy / European Copper Institute**: *Guide to high-efficiency conductor sizing*.
             """)
+
 
