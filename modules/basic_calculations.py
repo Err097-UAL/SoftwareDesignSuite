@@ -300,8 +300,8 @@ def app():
             4. **Reglamento Electrotécnico para Baja Tensión (REBT)**: Real Decreto 842/2002, Instrucción Técnica Complementaria **ITC-BT-07** e **ITC-BT-06** para el cálculo de líneas.
             """)
 
-   # =================================================================================
-    # TAB 3: AISLAMIENTOS (Mejorada con Normativa REBT). SECCIÓN MERAMENTE INFORMATIVA
+# =================================================================================
+    # TAB 3: AISLAMIENTOS (Updated with Engineering Decay Model)
     # =================================================================================
 
     with tab_insulation:
@@ -323,7 +323,6 @@ def app():
             * **XLPE (Libre de Halógenos):** Humo blanco, no tóxico.
             """)
             
-            # --- BLOQUE DE NORMATIVA CON TABLA OFICIAL ---
             with st.expander("📜 Ver Normativa REBT Asociada"):
                 st.markdown("""
                 **1. ITC-BT-19 (Instalaciones Interiores):**
@@ -340,7 +339,6 @@ def app():
                 st.table(df_rebt) 
                 st.caption("Valores según norma UNE 20460-5-523.")
 
-            # --- NUEVA SECCIÓN DE BIBLIOGRAFÍA ---
             st.divider()
             st.markdown("### 📚 Bibliografía y Verificación")
             st.write("Consulte las fuentes oficiales para contrastar estos datos:")
@@ -350,40 +348,61 @@ def app():
                 st.link_button("📄 REBT ITC-BT-19 (BOE)", 
                             "https://industria.gob.es/Calidad-Industrial/seguridadindustrial/instalacionesindustriales/baja-tension/Documents/bt/guia_bt_19_feb09R2.pdf")
             with c_link2:
-                st.link_button("📘 Modelo degradación térmica Arrhenius (pág 15, forma logarítmica)", 
-                            "http://www.scielo.org.co/pdf/rium/v12n23/v12n23a10.pdf")
+                st.link_button("📘 Ingeniería de Materiales (Degradación)", 
+                            "https://www.sciencedirect.com/topics/engineering/thermal-degradation")
 
         with col_plot:
-            # --- EXPLICACIÓN MATEMÁTICA ---
-            st.markdown("##### Modelo de Degradación Térmica")
-            st.latex(r"R(T) = R_0 \cdot e^{-\alpha \cdot (T - T_{ref})}")
+            # --- MODIFIED GRAPH LOGIC START ---
+            st.markdown("##### Modelo de Degradación de Integridad (Threshold Breakdown)")
             
-            # 
-
-            st.info("Empleamos la curva exponencial para modelar la degradación de la resistencia de aislamiento con la temperatura.")
+            # 1. Update the formula display
+            st.latex(r"y(x) = y_1 - A \cdot e^{x}")
             
-            temp_range = np.arange(20, 120, 5)
-            R0 = 1000 
-            R_pvc = R0 * np.exp(-0.045 * (temp_range - 20))
-            R_xlpe = R0 * np.exp(-0.035 * (temp_range - 20))
+            # 2. Update the text description as requested
+            st.write("This visualization uses a generic negative decay function ($y = y_1 - A \cdot e^x$), commonly used in engineering to model behaviors where a material's property remains relatively constant until it reaches a critical threshold, after which it rapidly degrades.")
+            
+            # 3. Implement the New Formula Logic
+            temp_range = np.arange(20, 140, 1) # Extended range to visualize the "crash" clearly
+            
+            y1 = 100.0  # Initial Integrity (100%)
+            A = 0.05    # Scaling factor for the drop
+            
+            # We map Temperature to 'x' to simulate the critical threshold behavior.
+            # Ideally, the exponent should become large enough to impact 'y' only near the limit.
+            
+            # PVC Calculation (Target breakdown ~70-80°C)
+            # x is scaled such that exp(x) stays small until T approaches 70
+            x_pvc = 0.11 * (temp_range - 20) 
+            integrity_pvc = y1 - A * np.exp(x_pvc)
+            
+            # XLPE Calculation (Target breakdown ~90-100°C)
+            # We shift the curve to the right to represent higher thermal stability
+            x_xlpe = 0.11 * (temp_range - 45)
+            integrity_xlpe = y1 - A * np.exp(x_xlpe)
+            
+            # Clean up data: Clip negative values to 0 for better visualization of failure
+            integrity_pvc = np.maximum(integrity_pvc, 0)
+            integrity_xlpe = np.maximum(integrity_xlpe, 0)
             
             df_iso = pd.DataFrame({
                 "Temperatura (°C)": np.concatenate([temp_range, temp_range]),
-                "Resistencia Aislamiento (Relativa)": np.concatenate([R_pvc, R_xlpe]),
-                "Tipo": ["PVC (70°C Max)", "XLPE (90°C Max)"] * len(temp_range)
+                "Integridad Material (%)": np.concatenate([integrity_pvc, integrity_xlpe]),
+                "Tipo": ["PVC (Límite ~70°C)", "XLPE (Límite ~90°C)"] * len(temp_range)
             })
             
-            fig_iso = px.line(df_iso, x="Temperatura (°C)", y="Resistencia Aislamiento (Relativa)", 
-                            color="Tipo", title="Resistencia de Aislamiento vs Temperatura",
-                            color_discrete_map={"PVC (70°C Max)": "#EF553B", "XLPE (90°C Max)": "#00CC96"})
+            fig_iso = px.line(df_iso, x="Temperatura (°C)", y="Integridad Material (%)", 
+                            color="Tipo", title="Integridad del Aislamiento vs Temperatura",
+                            color_discrete_map={"PVC (Límite ~70°C)": "#EF553B", "XLPE (Límite ~90°C)": "#00CC96"})
             
-            fig_iso.add_vrect(x0=70, x1=120, fillcolor="red", opacity=0.1, 
-                            annotation_text="Fallo PVC", annotation_position="top left")
-            fig_iso.add_vline(x=90, line_dash="dash", line_color="green", annotation_text="Límite XLPE")
+            # Add visual cues for the limits
+            fig_iso.add_vline(x=70, line_dash="dash", line_color="#EF553B", annotation_text="Límite PVC")
+            fig_iso.add_vline(x=90, line_dash="dash", line_color="#00CC96", annotation_text="Límite XLPE")
+            
+            fig_iso.update_yaxes(range=[0, 110]) # Lock Y axis to keep focus on the drop
 
             st.plotly_chart(fig_iso, use_container_width=True)
-            st.info("💡 **Conclusión:** La menor pendiente del XLPE indica mayor estabilidad dieléctrica frente al calor.")
-
+            st.info("💡 **Observación:** El gráfico muestra cómo el material mantiene sus propiedades (zona plana) hasta superar su temperatura crítica, momento en el que la degradación se vuelve exponencial.")
+            # --- MODIFIED GRAPH LOGIC END ---
     
     # ==============================================================================
     # TAB 4: LABORATORIO DE CÁLCULO (Actualizado con Bibliografía)
@@ -582,3 +601,4 @@ def app():
             2. **Gil Carrillo, F.** (2015). *Líneas Eléctricas*. Universidad de Almería.
             3. **Leonardo Energy / European Copper Institute**: *Guide to high-efficiency conductor sizing*.
             """)
+
