@@ -26,7 +26,7 @@ st.markdown("""
 
     /* Estilos Globales */
     .stApp {
-        background-color:  #004D24;
+        background-color:  #012B1B;
         font-family: 'Inter', sans-serif;
     }
     
@@ -199,5 +199,6 @@ elif st.session_state.current_section == "Advanced":
 elif st.session_state.current_section == "Topology":
 
     topology.app()
+
 
 
